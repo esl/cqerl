@@ -56,7 +56,9 @@ end).
     available_slots = [] :: list(integer()),
     waiting_preparation = [],
     mode :: hash | pooler,
-    key :: {term(), term()}
+    key :: {term(), term()},
+    heartbeat_interval  :: non_neg_integer(), % in millisecond
+    last_socket_send    :: non_neg_integer()  % in millisecond
 }).
 
 -record(client_user, {
@@ -152,19 +154,22 @@ init([Inet, Opts, OptGetter, Key]) ->
     case create_socket(Inet, OptGetter) of
         {ok, Socket, Transport} ->
             {AuthHandler, AuthArgs} = OptGetter(auth),
+            HeartbeatInterval = OptGetter(heartbeat_interval),
             cqerl:put_protocol_version(OptGetter(protocol_version)),
             {ok, OptionsFrame} = cqerl_protocol:options_frame(#cqerl_frame{}),
-            State = #client_state{
+            State0 = #client_state{
                 socket=Socket, trans=Transport, inet=Inet,
                 authmod=AuthHandler, authargs=AuthArgs,
                 users=[],
                 sleep=get_sleep_duration(Opts),
                 keyspace=normalise_to_atom(proplists:get_value(keyspace, Opts)),
                 key=Key,
-                mode=cqerl_app:mode()
+                mode=cqerl_app:mode(),
+                heartbeat_interval = HeartbeatInterval
             },
-            send_to_db(State, OptionsFrame),
+            State = send_to_db(State0, OptionsFrame),
             activate_socket(State),
+            erlang:send_after(HeartbeatInterval, self(), heartbeat_check),
             {ok, starting, State};
 
         {error, Reason} ->
@@ -372,8 +377,8 @@ handle_info({ Transport, Socket, BinaryMsg }, starting, State = #client_state{ s
             SelectedVersion = choose_cql_version(proplists:lookup('CQL_VERSION', Payload)),
             {ok, StartupFrame} = cqerl_protocol:startup_frame(#cqerl_frame{}, #cqerl_startup_options{compression=Compression,
                                                                                                      cql_version=SelectedVersion}),
-            send_to_db(State, StartupFrame),
-            {next_state, starting, State#client_state{compression_type=Compression}};
+            State1 = send_to_db(State, StartupFrame),
+            {next_state, starting, State1#client_state{compression_type=Compression}};
 
         %% Server tells us all is clear, we can start to throw queries at it
         {ok, #cqerl_frame{opcode=?CQERL_OP_READY}, _, Delayed} ->
@@ -389,8 +394,8 @@ handle_info({ Transport, Socket, BinaryMsg }, starting, State = #client_state{ s
 
                 {reply, Reply, AuthState} ->
                     {ok, AuthFrame} = cqerl_protocol:auth_frame(base_frame(State), Reply),
-                    send_to_db(State, AuthFrame),
-                    {next_state, starting, State#client_state{ authstate=AuthState }}
+                    State1 = send_to_db(State, AuthFrame),
+                    {next_state, starting, State1#client_state{ authstate=AuthState }}
             end;
 
         %% Server tells us we need to give another piece of data
@@ -401,8 +406,8 @@ handle_info({ Transport, Socket, BinaryMsg }, starting, State = #client_state{ s
                     stop_during_startup({auth_client_closed, Reason}, State);
                 {reply, Reply, AuthState} ->
                     {ok, AuthFrame} = cqerl_protocol:auth_frame(base_frame(State), Reply),
-                    send_to_db(State, AuthFrame),
-                    {next_state, starting, State#client_state{ authstate=AuthState }}
+                    State1 = send_to_db(State, AuthFrame),
+                    {next_state, starting, State1#client_state{ authstate=AuthState }}
             end;
 
         %% Server tells us something screwed up while authenticating
@@ -430,8 +435,8 @@ handle_info({ Transport, Socket, BinaryMsg }, starting, State = #client_state{ s
         {ok, #cqerl_frame{opcode=?CQERL_OP_RESULT}, {set_keyspace, _KeySpaceName}, Delayed} ->
             {next_state, live, switch_to_live_state(State) }
     end,
-    {_, _, State1} = Resp,
-    activate_socket(State1),
+    {_, _, State2} = Resp,
+    activate_socket(State2),
     append_delayed_segment(Resp, Delayed);
 
 handle_info({ rows, Call, Result }, live, State) ->
@@ -513,7 +518,11 @@ handle_info({ Transport, Socket, BinaryMsg }, live, State = #client_state{ socke
             {next_state, live, release_stream_id(StreamID, State)};
 
         {ok, #cqerl_frame{opcode=?CQERL_OP_EVENT}, _EventTerm, Delayed} ->
-            ok%% TODO Manage incoming server-driven events
+            ok; %% TODO Manage incoming server-driven events
+        {ok, #cqerl_frame{opcode=?CQERL_OP_SUPPORTED}, _Payload, Delayed} ->
+            %% SUPPORTED is the message received from Cassandra for OPTIONS request,
+            %% which we use for heartbeats. We need to handle that for live state without any State modifications.
+            {next_state, live, State}
     end,
 
     case Resp of
@@ -536,6 +545,12 @@ handle_info({ Transport, Socket, BinaryMsg }, sleep, State = #client_state{ sock
                 _ -> infinity
             end,
             {next_state, sleep, State#client_state{delayed=Delayed}, Duration1};
+
+        {ok, #cqerl_frame{opcode=?CQERL_OP_SUPPORTED}, _Payload, Delayed} ->
+            %% SUPPORTED is the message received from Cassandra for OPTIONS request,
+            %% which we use for heartbeats. We need to handle that for sleep state
+            %% in the same way as in live state.
+            handle_info({Transport, Socket, Delayed}, sleep, State#client_state{delayed = <<>>});
 
         %% While sleeping, any response to previously sent queries are ignored,
         %% but we still need to manage internal state accordingly
@@ -560,8 +575,26 @@ handle_info({'DOWN', _MonitorRef, process, Pid, _Info}, live, State=#client_stat
             end
     end;
 
+handle_info(heartbeat_check, StateName, State = #client_state{heartbeat_interval = 0}) ->
+    {next_state, StateName, State}; %% Disable heartbeat if interval is set to 0
+handle_info(heartbeat_check, StateName, State = #client_state{heartbeat_interval = HeartbeatInterval}) ->
+    TimeMargin = timer:seconds(1),
+    State1 =
+        case next_heartbeat_within(State) of
+            TimeLeft when TimeLeft < TimeMargin ->
+                %% OPTIONS frame is what Java driver sends as a heartbeat in case of idle connection
+                {ok, OptionsFrame} = cqerl_protocol:options_frame(#cqerl_frame{}),
+                erlang:send_after(HeartbeatInterval, self(), heartbeat_check),
+                send_to_db(State, OptionsFrame);
+            TimeLeft ->
+                erlang:send_after(TimeLeft, self(), heartbeat_check),
+                State
+        end,
+
+    {next_state, StateName, State1};
+
 handle_info(Info, StateName, State) ->
-    io:format("Received message ~w while in state ~w~n", [StateName, Info]),
+    io:format("Received message ~w while in state ~w~n", [Info, StateName]),
     {next_state, StateName, State}.
 
 
@@ -657,18 +690,18 @@ release_stream_id(StreamID, State=#client_state{available_slots=Slots, queries=Q
 process_outgoing_query(prepare, Query, State=#client_state{queries=Queries0}) ->
     {BaseFrame, State1} = seq_frame(State),
     {ok, PrepareFrame} = cqerl_protocol:prepare_frame(BaseFrame, Query),
-    send_to_db(State1, PrepareFrame),
-    maybe_signal_busy(State1),
+    State2 = send_to_db(State1, PrepareFrame),
+    maybe_signal_busy(State2),
     Queries1 = orddict:store(BaseFrame#cqerl_frame.stream_id, {preparing, Query}, Queries0),
-    State1#client_state{queries=Queries1};
+    State2#client_state{queries=Queries1};
 
 process_outgoing_query(Call=#cql_call{}, Batch=#cql_query_batch{}, State=#client_state{queries=Queries0}) ->
     {BaseFrame, State1} = seq_frame(State),
     {ok, BatchFrame} = cqerl_protocol:batch_frame(BaseFrame, Batch),
-    send_to_db(State1, BatchFrame),
-    maybe_signal_busy(State1),
+    State2 = send_to_db(State1, BatchFrame),
+    maybe_signal_busy(State2),
     Queries1 = orddict:store(BaseFrame#cqerl_frame.stream_id, {Call, Batch}, Queries0),
-    State1#client_state{queries=Queries1};
+    State2#client_state{queries=Queries1};
 
 process_outgoing_query(Call,
                        {queued, Continuation=#cql_result{cql_query=#cql_query{statement=Statement}}},
@@ -769,8 +802,8 @@ maybe_set_keyspace(State=#client_state{keyspace=Keyspace}) ->
         #cqerl_query_parameters{},
         #cqerl_query{statement = <<"USE ", KeyspaceName/binary>>}
     ),
-    send_to_db(State, Frame),
-    {starting, State}.
+    State1 = send_to_db(State, Frame),
+    {starting, State1}.
 
 switch_to_live_state(State=#client_state{users=Users, keyspace=Keyspace,
                                          inet=Inet, key=Key, mode=Mode}) ->
@@ -798,9 +831,14 @@ switch_to_live_state(State=#client_state{users=Users, keyspace=Keyspace,
 
 
 
-send_to_db(#client_state{trans=tcp, socket=Socket}, Data) when is_binary(Data) ->
+send_to_db(ClientState, Data) when is_binary(Data) ->
+    do_send_to_db(ClientState, Data),
+    LastSocketSend = os:system_time(millisecond),
+    ClientState#client_state{last_socket_send = LastSocketSend}.
+
+do_send_to_db(#client_state{trans=tcp, socket=Socket}, Data) when is_binary(Data) ->
     gen_tcp:send(Socket, Data);
-send_to_db(#client_state{trans=ssl, socket=Socket}, Data) when is_binary(Data) ->
+do_send_to_db(#client_state{trans=ssl, socket=Socket}, Data) when is_binary(Data) ->
     ssl:send(Socket, Data).
 
 
@@ -938,3 +976,10 @@ stop_during_startup(Reason, State = #client_state{users = Users}) ->
     % connect.
     cqerl_app:mode() =:= pooler andalso timer:sleep(200),
     {stop, normal, State#client_state{socket=undefined}}.
+
+
+next_heartbeat_within(#client_state{last_socket_send = LastSocketSend,
+                                    heartbeat_interval = Interval}) ->
+    CurrentTime = os:system_time(millisecond),
+    TimeLeft = Interval - (CurrentTime - LastSocketSend),
+    max(0, TimeLeft).
