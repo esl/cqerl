@@ -59,7 +59,7 @@ client_spec(Key, Node, FullOpts, OptGetter, I) ->
 
 add_clients(Node, Opts) ->
     Key = cqerl_client:make_key(Node, Opts),
-    ChildCount = child_count(Key),
+    ChildCount = child_count(Key, Opts),
     GlobalOpts = cqerl:get_global_opts(),
     OptGetter = cqerl:make_option_getter(Opts, GlobalOpts),
     FullOpts = [ {ssl, OptGetter(ssl)}, {keyspace, OptGetter(keyspace)} ],
@@ -70,5 +70,6 @@ add_clients(Node, Opts) ->
     end.
 
 
-child_count(_Key) ->
-    application:get_env(cqerl, num_clients, 20).
+child_count(_Key, Opts) ->
+    GlobalDefault = application:get_env(cqerl, num_clients, ?DEFAULT_NUM_CLIENTS),
+    proplists:get_value(num_clients, Opts, GlobalDefault).
