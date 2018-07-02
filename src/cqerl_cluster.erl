@@ -70,8 +70,12 @@ get_any_client() ->
 init(_) ->
     ets:new(cqerl_clusters, [named_table, {read_concurrency, true}, protected, 
                              {keypos, #cluster_table.key}, bag]),
-    load_initial_clusters(),
-    {ok, undefined}.
+    case check_load_status(load_initial_clusters()) of
+        ok ->
+            {ok, undefined};
+        Errors ->
+            {stop, {error_loading_initial_clusters, Errors}}
+    end.
 
 handle_cast(_Msg, State) -> 
     {noreply, State}.
@@ -118,6 +122,17 @@ load_initial_clusters() ->
                 ({ClusterKey, ClientKeys}) when is_list(ClientKeys) ->
                     do_add_to_cluster(ClusterKey, prepare_client_keys(ClientKeys))
             end, Clusters)
+    end.
+
+-spec check_load_status(_) -> ok | [{error, any()}].
+check_load_status(Results) ->
+    {_Ok, Errors} = lists:partition(fun
+                                        ({ok, _}) -> true;
+                                        ({error, _}) -> false
+                                    end, Results),
+    case Errors of
+        [] -> ok;
+        [_|_] -> Errors
     end.
 
 do_add_to_cluster(ClusterKey, ClientKeys) ->
