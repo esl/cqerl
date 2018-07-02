@@ -78,7 +78,7 @@ handle_info(_Msg, State) ->
 
 handle_call({add_to_cluster, ClusterKey, ClientKeys}, _From, State) ->
     Reply = do_add_to_cluster(ClusterKey, ClientKeys),
-    {reply, ok, State};
+    {reply, Reply, State};
 
 handle_call(_Msg, _From, State) -> 
     {reply, {error, unexpected_message}, State}.
@@ -125,14 +125,15 @@ load_initial_clusters() ->
     end.
 
 do_add_to_cluster(ClusterKey, ClientKeys) ->
-    NewClients = determine_new_clients(ClusterKey, ClientKeys),
     GlobalOpts = application:get_all_env(cqerl),
+    NewClients = determine_new_clients(ClusterKey, ClientKeys),
     lists:map(fun (Key = {Node, Opts}) ->
         case cqerl_hash:get_client(Node, Opts) of
-            {ok, _} ->
-                ets:insert(cqerl_clusters, #cluster_table{key=ClusterKey, client_key=Key});
+            {ok, R} ->
+                ets:insert(cqerl_clusters, #cluster_table{key=ClusterKey, client_key=Key}),
+                {ok, R};
             {error, Reason} ->
-                io:format(standard_error, "Error while starting client ~p for cluster ~p:~n~p", [Key, ClusterKey, Reason])
+                {error, Reason}
         end
     end, prepare_client_keys(NewClients, GlobalOpts)).
 
