@@ -143,4 +143,4 @@ do_add_to_cluster(ClusterKey, ClientKeys) ->
 determine_new_clients(ClusterKey, ClientKeys) ->
     Clusters = ets:lookup(cqerl_clusters, ClusterKey),
     AlreadyStarted = sets:from_list([ C#cluster_table.client_key || C <- Clusters ]),
-    sets:from_list( sets:subtract(sets:from_list(ClientKeys), AlreadyStarted) ).
+    sets:to_list( sets:subtract(sets:from_list(ClientKeys), AlreadyStarted) ).
