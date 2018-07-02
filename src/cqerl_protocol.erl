@@ -548,7 +548,7 @@ response_frame(Response0=#cqerl_frame{compression_type=CompressionType},
     case HasWarnings of
         true ->
             {ok, Warnings, Body2} = ?DATA:decode_string_list(UncompressedBody),
-            io:format("Warning from Cassandra: ~p~n", [Warnings]);
+            error_logger:warning_msg("Warning from Cassandra: ~p~n", [Warnings]);
         false ->
             Body2 = UncompressedBody
     end,

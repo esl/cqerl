@@ -594,7 +594,7 @@ handle_info(heartbeat_check, StateName, State = #client_state{heartbeat_interval
     {next_state, StateName, State1};
 
 handle_info(Info, StateName, State) ->
-    io:format("Received message ~w while in state ~w~n", [Info, StateName]),
+    error_logger:info_msg("Received message ~w while in state ~w~n", [Info, StateName]),
     {next_state, StateName, State}.
 
 
