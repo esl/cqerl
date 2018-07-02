@@ -21,6 +21,8 @@
     add_nodes/3
 ]).
 
+-type client_key() :: cqerl_hash:key().
+
 -define(PRIMARY_CLUSTER, '$primary_cluster').
 -define(ADD_NODES_TIMEOUT, case application:get_env(cqerl, add_nodes_timeout) of
     undefined -> 30000;
@@ -35,6 +37,7 @@ end).
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
+-spec add_nodes([client_key()]) -> [{ok, any()} | {error, any()}].
 add_nodes(ClientKeys) ->
     gen_server:call(?MODULE, {add_to_cluster, ?PRIMARY_CLUSTER, ClientKeys}, ?ADD_NODES_TIMEOUT).
 
