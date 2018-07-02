@@ -107,22 +107,15 @@ load_initial_clusters() ->
     case application:get_env(cqerl, cassandra_clusters, undefined) of
         undefined ->
             case application:get_env(cqerl, cassandra_nodes, undefined) of
-                undefined -> ok;
+                undefined -> [];
                 ClientKeys when is_list(ClientKeys) ->
                     do_add_to_cluster(?PRIMARY_CLUSTER, prepare_client_keys(ClientKeys))
             end;
         Clusters when is_list(Clusters) ->
-            lists:foreach(fun
+            lists:flatmap(fun
                 ({ClusterKey, {ClientKeys, Opts0}}) when is_list(ClientKeys) ->
                     do_add_to_cluster(ClusterKey, prepare_client_keys(ClientKeys, Opts0));
                 ({ClusterKey, ClientKeys}) when is_list(ClientKeys) ->
-                    do_add_to_cluster(ClusterKey, prepare_client_keys(ClientKeys))
-            end, Clusters);
-        Clusters ->
-            maps:map(fun
-                (ClusterKey, {ClientKeys, Opts0}) when is_list(ClientKeys) ->
-                    do_add_to_cluster(ClusterKey, prepare_client_keys(ClientKeys, Opts0));
-                (ClusterKey, ClientKeys) when is_list(ClientKeys) ->
                     do_add_to_cluster(ClusterKey, prepare_client_keys(ClientKeys))
             end, Clusters)
     end.
