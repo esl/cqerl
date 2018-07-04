@@ -667,8 +667,8 @@ maybe_signal_busy(State) ->
 
 
 
-append_delayed_segment({X, Y, State}, Delayed) ->
-    {X, Y, State#client_state{delayed=Delayed}}.
+append_delayed_segment({Next, StateName, State}, Delayed) ->
+    {Next, StateName, State#client_state{delayed=Delayed}}.
 
 
 
