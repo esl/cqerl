@@ -975,7 +975,7 @@ stop_during_startup(Reason, State = #client_state{users = Users}) ->
     % eaddrinuse errors on further attempts (including valid ones) by clients to
     % connect.
     cqerl_app:mode() =:= pooler andalso timer:sleep(200),
-    {stop, normal, State#client_state{socket=undefined}}.
+    {stop, Reason, State#client_state{socket = undefined}}.
 
 
 next_heartbeat_within(#client_state{last_socket_send = LastSocketSend,
