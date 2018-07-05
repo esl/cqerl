@@ -517,8 +517,10 @@ handle_info({ Transport, Socket, BinaryMsg }, live, State = #client_state{ socke
             end,
             {next_state, live, release_stream_id(StreamID, State)};
 
-        {ok, #cqerl_frame{opcode=?CQERL_OP_EVENT}, _EventTerm, Delayed} ->
-            ok; %% TODO Manage incoming server-driven events
+        {ok, #cqerl_frame{opcode=?CQERL_OP_EVENT}, EventTerm, Delayed} ->
+            %% TODO Manage incoming server-driven events
+            error_logger:warning_msg("not supported opcode ~p with payload ~p", [?CQERL_OP_EVENT, EventTerm]),
+            {next_state, live, State};
         {ok, #cqerl_frame{opcode=?CQERL_OP_SUPPORTED}, _Payload, Delayed} ->
             %% SUPPORTED is the message received from Cassandra for OPTIONS request,
             %% which we use for heartbeats. We need to handle that for live state without any State modifications.
@@ -594,7 +596,7 @@ handle_info(heartbeat_check, StateName, State = #client_state{heartbeat_interval
     {next_state, StateName, State1};
 
 handle_info(Info, StateName, State) ->
-    error_logger:info_msg("Received message ~w while in state ~w~n", [Info, StateName]),
+    error_logger:warning_msg("Received message ~w while in state ~w~n", [Info, StateName]),
     {next_state, StateName, State}.
 
 
