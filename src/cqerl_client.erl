@@ -839,9 +839,9 @@ send_to_db(ClientState, Data) when is_binary(Data) ->
     ClientState#client_state{last_socket_send = LastSocketSend}.
 
 do_send_to_db(#client_state{trans=tcp, socket=Socket}, Data) when is_binary(Data) ->
-    gen_tcp:send(Socket, Data);
+    ok = gen_tcp:send(Socket, Data);
 do_send_to_db(#client_state{trans=ssl, socket=Socket}, Data) when is_binary(Data) ->
-    ssl:send(Socket, Data).
+    ok = ssl:send(Socket, Data).
 
 
 
