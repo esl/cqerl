@@ -594,7 +594,7 @@ handle_info(heartbeat_check, StateName, State = #client_state{heartbeat_interval
     {next_state, StateName, State1};
 
 handle_info(Info, StateName, State) ->
-    io:format("Received message ~w while in state ~w~n", [Info, StateName]),
+    error_logger:info_msg("Received message ~w while in state ~w~n", [Info, StateName]),
     {next_state, StateName, State}.
 
 
@@ -667,8 +667,8 @@ maybe_signal_busy(State) ->
 
 
 
-append_delayed_segment({X, Y, State}, Delayed) ->
-    {X, Y, State#client_state{delayed=Delayed}}.
+append_delayed_segment({Next, StateName, State}, Delayed) ->
+    {Next, StateName, State#client_state{delayed=Delayed}}.
 
 
 
@@ -975,7 +975,7 @@ stop_during_startup(Reason, State = #client_state{users = Users}) ->
     % eaddrinuse errors on further attempts (including valid ones) by clients to
     % connect.
     cqerl_app:mode() =:= pooler andalso timer:sleep(200),
-    {stop, normal, State#client_state{socket=undefined}}.
+    {stop, Reason, State#client_state{socket = undefined}}.
 
 
 next_heartbeat_within(#client_state{last_socket_send = LastSocketSend,
