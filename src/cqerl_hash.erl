@@ -225,9 +225,18 @@ add_new_client(Pid, PendingItem = #pending{reply_to = ReplyTo, key = Key, table 
     State#state{pending = NewPending}.
 
 add_replacement_client(Key, Pid, State) ->
-    {ok, T} = get_table(Key),
-    add_client(Pid, T),
+    case get_table(Key) of
+        {ok, T} ->
+            add_client(Pid, T);
+        {error, clients_not_started} ->
+            %% Ignore some race condition
+            %% Pid should be already dead
+            error_logger:warning_msg("issue=add_replacement_client_failed "
+                                     "key=~p pid=~p state=~1000p process_info=~1000p",
+                                     [Key, Pid, State, erlang:process_info(Pid)])
+    end,
     State.
+
 
 add_client(Pid, Table) ->
     monitor(process, Pid),
