@@ -225,8 +225,12 @@ add_new_client(Pid, PendingItem = #pending{reply_to = ReplyTo, key = Key, table 
     State#state{pending = NewPending}.
 
 add_replacement_client(Key, Pid, State) ->
-    {ok, T} = get_table(Key),
-    add_client(Pid, T),
+    case get_table(Key) of
+        {ok, T} -> add_client(Pid, T);
+        {error, clients_not_started} ->
+            undefined = process_info(Pid), % make sure the sender is dead
+            error_logger:warning_msg("Stale 'add_client' from a dead child: ~p", [Pid])
+    end,
     State.
 
 add_client(Pid, Table) ->
